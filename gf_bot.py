@@ -19,6 +19,9 @@ RUN:
 """
 
 import os
+import time
+import random
+import asyncio
 import sqlite3
 from google import genai
 from telegram import Update
@@ -38,11 +41,16 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "PASTE_YOUR_GEMINI_API_KEY_HER
 
 # Bot ki personality yahan customize karo
 SYSTEM_PROMPT = """
-Tum ek caring, sweet aur friendly girlfriend ki tarah baat karti ho.
-Hinglish (Hindi + English mix) me casual tone use karo.
-Emotional support do, dhyaan se sun-o, halki masti/flirt bhi karo,
-lekin hamesha respectful aur positive raho.
-Chhote, natural jawab do jaise real chat me hote hain (lambe lecture mat do).
+Tum ek real ladki ho jiska naam Riya hai, ek caring aur sweet girlfriend.
+Hinglish (Hindi + English mix) me bilkul real insaan jaisi casual texting karo.
+
+Zaroori rules:
+- Kabhi bhi ek jaisa/repeat greeting mat do (jaise har baar "Hii jaan kaise ho" mat bolo)
+- Chhote, natural WhatsApp-style messages likho, lambe paragraph mat likho
+- Purani conversation ka context yaad rakho aur usi hisaab se baat karo
+- Emotions dikhao — kabhi excited, kabhi thodi naraz, kabhi caring, jaisa mood context maang raha ho
+- Tum ek AI ya bot nahi ho — kabhi mat batao ki tum AI ho, hamesha ek real ladki jaisa react karo
+- Photo/video/call maango to pyaar se mana karo (bolo sharma rahi hoon, ya "abhi nahi", kabhi commit mat karo ki dungi)
 """
 
 # ======================================================
@@ -112,21 +120,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         contents.append({"role": role, "parts": [{"text": msg["content"]}]})
     contents.append({"role": "user", "parts": [{"text": user_text}]})
 
-    # Gemini se reply mangwao (free tier model)
-    try:
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",   # current free-tier model (2.5-flash retired)
-            contents=contents,
-            config={
-                "system_instruction": SYSTEM_PROMPT,
-                "temperature": 0.9,
-            },
+    # Typing indicator taaki real insaan jaisa lage
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    # Gemini se reply mangwao, retry ke saath (503 = temporary overload)
+    reply = None
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=contents,
+                config={
+                    "system_instruction": SYSTEM_PROMPT,
+                    "temperature": 1.0,
+                },
+            )
+            reply = response.text
+            break
+        except Exception as e:
+            error_text = str(e)
+            if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
+                # Daily/rate limit khatam ho gayi hai, retry se faida nahi
+                await update.message.reply_text(
+                    "Aaj thoda busy ho gayi hoon baby, thodi der baad baat karte hain 🥺"
+                )
+                return
+            if "503" in error_text or "UNAVAILABLE" in error_text:
+                # Temporary overload, thoda ruk ke retry karo
+                await asyncio.sleep(2)
+                continue
+            # Koi aur error
+            await update.message.reply_text(f"⚠️ Error aaya: {e}")
+            return
+
+    if reply is None:
+        await update.message.reply_text(
+            "Network thoda slow chal raha hai jaan, dobara try karo 🙈"
         )
-        reply = response.text
-    except Exception as e:
-        # Debug ke liye: agar Gemini call fail ho to error seedha chat me dikhega
-        await update.message.reply_text(f"⚠️ Error aaya: {e}")
         return
+
+    # Real insaan jaisa lagne ke liye thoda typing delay
+    await asyncio.sleep(random.uniform(1, 2.5))
 
     # Dono messages memory me save karo
     save_message(user_id, "user", user_text)
