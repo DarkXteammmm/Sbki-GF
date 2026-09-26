@@ -1,28 +1,29 @@
 """
-Telegram "Girlfriend Style" Chatbot (FREE - Groq API)
+Telegram "Girlfriend Style" Chatbot (FREE - Google Gemini API)
 ----------------------------------------------------------------
 Ye bot Telegram pe har user se ek caring, friendly "girlfriend" jaisi
 personality me baat karta hai, aur har user ki purani chat yaad rakhta hai
 (memory) taaki conversation natural lage.
 
-Isme Groq ka FREE API use ho raha hai (koi card nahi chahiye, bahut fast hai).
+Isme Google Gemini ka FREE API use ho raha hai (koi card nahi chahiye).
 
 SETUP (neeche 2 jagah apni values daalni hain):
   1. BOT_TOKEN      -> BotFather se mila hua token
-  2. GROQ_API_KEY   -> console.groq.com se mili hui FREE key
+  2. GEMINI_API_KEY -> aistudio.google.com se mili hui FREE key
 
 INSTALL (terminal me ek baar chalao):
-  pip install python-telegram-bot groq
+  pip install python-telegram-bot google-genai
 
 RUN:
   python gf_bot.py
 """
 
 import os
+import time
 import random
 import asyncio
 import sqlite3
-from groq import Groq
+from google import genai
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -36,7 +37,7 @@ from telegram.ext import (
 # STEP 1: VALUES (Railway pe ye "Environment Variables" se aayengi)
 # ======================================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "PASTE_YOUR_BOT_TOKEN_HERE")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "PASTE_YOUR_GROQ_API_KEY_HERE")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "PASTE_YOUR_GEMINI_API_KEY_HERE")
 
 # Bot ki personality yahan customize karo
 SYSTEM_PROMPT = """
@@ -66,7 +67,7 @@ CREATE TABLE IF NOT EXISTS messages (
 """)
 conn.commit()
 
-client = Groq(api_key=GROQ_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 MAX_HISTORY = 20  # kitne purane messages yaad rakhne hain (zyada = zyada memory, zyada cost)
 
@@ -109,35 +110,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
 
-    # Purani history nikalo (Groq ka format OpenAI jaisa hai: role seedha "user"/"assistant")
+    # Purani history nikalo
     history = get_history(user_id)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
-    messages.append({"role": "user", "content": user_text})
+
+    # Gemini ka format thoda alag hai: role "assistant" ki jagah "model" hota hai
+    contents = []
+    for msg in history:
+        role = "model" if msg["role"] == "assistant" else "user"
+        contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+    contents.append({"role": "user", "parts": [{"text": user_text}]})
 
     # Typing indicator taaki real insaan jaisa lage
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-    # Groq se reply mangwao, retry ke saath
+    # Gemini se reply mangwao, retry ke saath (503 = temporary overload)
     reply = None
     for attempt in range(3):
         try:
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=messages,
-                temperature=1.0,
+            response = client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=contents,
+                config={
+                    "system_instruction": SYSTEM_PROMPT,
+                    "temperature": 1.0,
+                },
             )
-            reply = response.choices[0].message.content
+            reply = response.text
             break
         except Exception as e:
             error_text = str(e)
-            if "429" in error_text or "rate_limit" in error_text.lower():
+            if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
+                # Daily/rate limit khatam ho gayi hai, retry se faida nahi
                 await update.message.reply_text(
                     "Aaj thoda busy ho gayi hoon baby, thodi der baad baat karte hain 🥺"
                 )
                 return
-            if "503" in error_text or "overloaded" in error_text.lower():
+            if "503" in error_text or "UNAVAILABLE" in error_text:
+                # Temporary overload, thoda ruk ke retry karo
                 await asyncio.sleep(2)
                 continue
+            # Koi aur error
             await update.message.reply_text(f"⚠️ Error aaya: {e}")
             return
 
