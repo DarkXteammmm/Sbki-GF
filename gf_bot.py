@@ -113,15 +113,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contents.append({"role": "user", "parts": [{"text": user_text}]})
 
     # Gemini se reply mangwao (free tier model)
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",   # free tier me chalta hai
-        contents=contents,
-        config={
-            "system_instruction": SYSTEM_PROMPT,
-            "temperature": 0.9,
-        },
-    )
-    reply = response.text
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.8-flash",   # current free-tier model (2.5-flash retired)
+            contents=contents,
+            config={
+                "system_instruction": SYSTEM_PROMPT,
+                "temperature": 0.9,
+            },
+        )
+        reply = response.text
+    except Exception as e:
+        # Debug ke liye: agar Gemini call fail ho to error seedha chat me dikhega
+        await update.message.reply_text(f"⚠️ Error aaya: {e}")
+        return
 
     # Dono messages memory me save karo
     save_message(user_id, "user", user_text)
